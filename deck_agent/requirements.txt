@@ -1,0 +1,11 @@
+# Intentionally minimal. The agent loop itself needs nothing beyond the stdlib.
+# Add your gateway SDK / data-source clients as you wire them in.
+
+# python-pptx for the renderer (render_deck_impl)
+python-pptx>=1.0.0
+
+# Common data-layer deps (uncomment as you wire real sources)
+# pandas>=2.0
+# openpyxl>=3.1
+# blpapi            # Bloomberg - installed from Bloomberg's own index
+# anthropic         # if your gateway speaks the Anthropic SDK directly
