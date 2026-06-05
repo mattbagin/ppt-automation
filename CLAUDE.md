@@ -100,9 +100,18 @@ iteration is one model turn plus tool execution:
 - **Tool errors are conversational, not fatal.** A failing tool returns an
   `is_error` `tool_result` the model reads and acts on (this is what makes the
   validate → render retry loop work). It does not crash the run.
+- **Gateway calls are retried** with bounded exponential backoff
+  (`_call_gateway_with_retry`). After retries are exhausted the run ends as
+  `gateway_error` rather than crashing. The retry currently catches any
+  exception — narrow it to the gateway SDK's retryable errors (timeout/5xx/429)
+  once that SDK is wired, so non-transient failures (auth/4xx) fail fast.
 - **The only terminal success is a clean `render_deck`.** A plain text response
   (no tool call) ends the run as `needs_user_input`. `MAX_TURNS` (25) is the
   cost/safety ceiling.
+- **Audit trail.** Pass `audit_dir=` to `run_deck_agent` and every run (success
+  or failure) writes a JSON record: timestamp, brief, status, output path +
+  SHA-256, and the full transcript. Treat that directory as an audit log —
+  agree retention/access/PII rules with audit before go-live.
 
 The validation layers run cheap-and-structural first, expensive-and-semantic
 last (`validators.py`): (1) schema/structural, (2) closed vocabulary, (3)
@@ -140,12 +149,20 @@ body. The loop and validator depend on the contracts, not the implementations.
 
 ## Known gaps before this is production-ready
 
-These are scaffold-stage gaps to close during the corporate build-out, not bugs
-in the design: no automated test suite (the validators especially want unit
-coverage); transcript persistence is returned by the loop but not written to
-disk; no credential/secret handling in the gateway; the gateway call itself is
-not wrapped for transient-network retry; `output_name` is LLM-controlled and used
-directly in a path (sanitise before the renderer touches disk); skill names are
-declared in three places (`definitions.py` enum, `SKILL_CATALOG`, `_SKILL_FILES`)
-and can drift; dependencies are unpinned. See the review notes accompanying this
-scaffold for detail.
+Still open, to close during the corporate build-out:
+
+- **No automated test suite.** The validators are pure functions and the
+  safety-critical component — they want unit coverage per layer and per error
+  path. `run.py` is a demo, not coverage.
+- **No credential/secret handling in the gateway.** Document how secrets reach
+  `GatewayClient` (env vars / secret manager, never literals). `.gitignore`
+  already excludes `.env`.
+- **Skill names are declared in three places** (`definitions.py` `load_skill`
+  enum, `SKILL_CATALOG`, `_SKILL_FILES`) and can drift — derive from one source.
+- **Dependencies are unpinned**; consider a lockfile / `pyproject.toml`.
+- **`chart_type` inconsistency**: the `data-viz` skill emits it but the schema
+  and validator don't account for it — reconcile when the schema is frozen.
+
+Addressed in this scaffold (previously open): `output_name` path-traversal
+(sanitised in `deck.py`), gateway transient-failure retry (`agent.py`), and
+transcript/audit persistence (`audit_dir`).

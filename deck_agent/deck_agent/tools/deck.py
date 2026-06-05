@@ -18,11 +18,30 @@ validator/renderer DRIFT surfaces loudly rather than producing a broken file.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
 from ..validation import validate_spec as _validate
-from .data import fetch_data_impl, get_data_catalog
+from .data import get_data_catalog
+
+# output_name is LLM-controlled and flows into a filesystem path. Restrict it to a
+# safe basename allowlist so a spec cannot direct writes outside the output dir
+# (e.g. "../../etc/x") or smuggle in a path separator. No extension — we append it.
+_SAFE_OUTPUT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _safe_output_name(output_name: str) -> str | None:
+    """Return a sanitized basename, or None if the name is unusable.
+
+    Strips any directory components an LLM might inject (Path(...).name), then
+    enforces the allowlist. Returning None (rather than raising) lets the caller
+    surface a conversational error the model can correct, matching validate_spec.
+    """
+    if not isinstance(output_name, str):
+        return None
+    base = Path(output_name).name
+    return base if _SAFE_OUTPUT_NAME.match(base) else None
 
 
 def validate_spec_impl(spec: dict) -> dict:
@@ -32,6 +51,18 @@ def validate_spec_impl(spec: dict) -> dict:
 
 
 def render_deck_impl(spec: dict, output_name: str, output_dir: str | None = None) -> dict:
+    # Reject unsafe filenames before anything touches disk. Conversational error.
+    safe_name = _safe_output_name(output_name)
+    if safe_name is None:
+        return {
+            "rendered": False,
+            "reason": (
+                f"output_name '{output_name}' is not a valid filename. Use only "
+                f"letters, digits, hyphen, and underscore — no path separators, "
+                f"and no file extension (it is added for you)."
+            ),
+        }
+
     # Belt-and-suspenders: never render an invalid spec, no matter what.
     catalog = get_data_catalog()
     result = _validate(spec, catalog)
@@ -46,7 +77,7 @@ def render_deck_impl(spec: dict, output_name: str, output_dir: str | None = None
     out_dir = Path(output_dir or "output")
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d")
-    out_path = out_dir / f"{output_name}_{stamp}.pptx"
+    out_path = out_dir / f"{safe_name}_{stamp}.pptx"
 
     _render(spec, out_path)  # STUB — see below
 

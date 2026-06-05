@@ -123,6 +123,7 @@ def main() -> None:
         tools=TOOLS,
         tool_implementations=build_tool_implementations(skill_loader),
         system_prompt=build_system_prompt(),
+        audit_dir="output/transcripts",  # demonstrates the per-run audit record
     )
 
     print("\n" + "=" * 60)
@@ -130,6 +131,7 @@ def main() -> None:
     print(f"TURNS USED  : {result.turns_used}")
     print(f"OUTPUT PATH : {result.output_path}")
     print(f"SKILLS LOADED: {sorted(skill_loader.loaded)}")
+    print(f"AUDIT RECORD: see output/transcripts/ ({len(result.transcript)} messages captured)")
     print("=" * 60)
 
 
