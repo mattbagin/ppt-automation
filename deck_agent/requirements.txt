@@ -4,6 +4,9 @@
 # python-pptx for the renderer (render_deck_impl)
 python-pptx>=1.0.0
 
+# Test suite (tests/) — the validators are the safety-critical component.
+pytest>=8.0
+
 # Common data-layer deps (uncomment as you wire real sources)
 # pandas>=2.0
 # openpyxl>=3.1

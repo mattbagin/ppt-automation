@@ -30,5 +30,19 @@ element types, layouts, and how to compose slides.
 - `chart` — visualization (data_key with shape series|matrix); see data-viz skill
 - `kpi`   — single highlighted value (data_key with shape scalar)
 
-## Layouts and slot counts
-See the renderer's capabilities; do not exceed a layout's element slots.
+Only `table`, `chart`, and `kpi` consume data. A `data_key` on a `title` or
+`text` element is a validation error — it would never be rendered.
+
+## Layouts
+
+Each layout supports specific element types (it has no region for the others)
+and a limited number of element slots. Do not exceed either.
+
+| layout          | allowed elements                  | slots | table rows |
+|-----------------|-----------------------------------|-------|------------|
+| title_slide     | title, text                       | 2     | —          |
+| section_header  | title                             | 1     | —          |
+| single_table    | title, table                      | 2     | 18         |
+| table_and_chart | title, table, chart, text, kpi    | 4     | 12         |
+| two_charts      | title, chart                      | 3     | —          |
+| commentary      | title, text, kpi                  | 2     | —          |

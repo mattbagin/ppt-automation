@@ -40,6 +40,17 @@ ALL_STYLE_TOKENS: set[str] = (
     CHART_STYLE_TOKENS | TABLE_STYLE_TOKENS | TEXT_STYLE_TOKENS
 )
 
+# Which style-token family each element type accepts. A token from the wrong
+# family (e.g. a chart style on a table) is a vocabulary error even though the
+# token itself exists. An empty set means the element takes NO style token.
+ELEMENT_STYLE_TOKENS: dict[str, set[str]] = {
+    "title": set(),                 # titles are styled by the layout
+    "text":  TEXT_STYLE_TOKENS,
+    "table": TABLE_STYLE_TOKENS,
+    "chart": CHART_STYLE_TOKENS,
+    "kpi":   TEXT_STYLE_TOKENS,     # example grouping — align with corporate style
+}
+
 # ---------------------------------------------------------------------------
 # Element types the spec / renderer support.
 # ---------------------------------------------------------------------------
@@ -56,8 +67,16 @@ ELEMENT_DATA_SHAPES: dict[str, set[str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Layouts and their capacity. Slot counts and region dimensions live together
-# so the validator can check fit and the renderer can place elements.
+# Layouts and their capacity. Slot counts, allowed element types, and region
+# dimensions live together so the validator can check fit and the renderer can
+# place elements.
+#
+# allowed_element_types is the authoritative "does this layout have a region
+# for this element" statement. Keep it consistent with the region fields:
+# "table" allowed  <=>  table_max_rows > 0; "chart" allowed <=> chart_region set.
+# (The capacity check backstops table drift: table allowed with max_rows 0
+# produces a validation error rather than a silent pass.)
+#
 # Dimensions are in EMU-agnostic "points" here for illustration; convert to your
 # renderer's unit (python-pptx uses EMU via Inches()/Pt()).
 # ---------------------------------------------------------------------------
@@ -65,34 +84,48 @@ ELEMENT_DATA_SHAPES: dict[str, set[str]] = {
 LAYOUTS: dict[str, dict] = {
     "title_slide": {
         "element_slots": 2,            # title + subtitle
+        "allowed_element_types": {"title", "text"},
         "table_max_rows": 0,
     },
     "section_header": {
         "element_slots": 1,
+        "allowed_element_types": {"title"},
         "table_max_rows": 0,
     },
     "single_table": {
         "element_slots": 2,            # title + one table
+        "allowed_element_types": {"title", "table"},
         "table_max_rows": 18,
         "chart_region": None,
     },
     "table_and_chart": {
         "element_slots": 4,            # title + table + chart + commentary
+        "allowed_element_types": {"title", "table", "chart", "text", "kpi"},
         "table_max_rows": 12,
         "chart_region": {"width_pt": 360, "height_pt": 280},
     },
     "two_charts": {
         "element_slots": 3,            # title + two charts
+        "allowed_element_types": {"title", "chart"},
         "table_max_rows": 0,
         "chart_region": {"width_pt": 300, "height_pt": 240},
     },
     "commentary": {
         "element_slots": 2,            # title + body text
+        "allowed_element_types": {"title", "text", "kpi"},
         "table_max_rows": 0,
     },
 }
 
 LAYOUT_NAMES: set[str] = set(LAYOUTS.keys())
+
+
+def layouts_supporting(element_type: str) -> list[str]:
+    """Layouts that have a region for the given element type (for fix hints)."""
+    return sorted(
+        name for name, cfg in LAYOUTS.items()
+        if element_type in cfg.get("allowed_element_types", set())
+    )
 
 
 def layout_limits(layout_name: str) -> dict:

@@ -27,6 +27,8 @@ deck_agent/                         # repo-level project dir (run commands from 
 ├── README.md                       # design rationale — read this first
 ├── requirements.txt
 ├── run.py                          # CLI entry point / smoke test (fake gateway)
+├── tests/
+│   └── test_validators.py          # unit coverage for the validation layers
 └── deck_agent/                     # the importable package
     ├── agent.py                    # the agent loop (stable core)
     ├── gateway.py                  # gateway client adapter  [STUB]
@@ -114,10 +116,14 @@ iteration is one model turn plus tool execution:
   agree retention/access/PII rules with audit before go-live.
 
 The validation layers run cheap-and-structural first, expensive-and-semantic
-last (`validators.py`): (1) schema/structural, (2) closed vocabulary, (3)
-referential integrity, (4) renderability (shape-fit, capacity, layout-slot fit).
-Layers fail-rich within a layer (collect all errors) and fail-fast between layers
-where a later layer would be meaningless.
+last (`validators.py`): (1) schema/structural, (2) closed vocabulary incl.
+style-token family per element type, (3) referential integrity, (4)
+renderability (element-region fit per layout, shape-fit, data_key on non-data
+elements, capacity, layout-slot fit). Layers fail-rich within a layer (collect
+all errors) and fail-fast between layers where a later layer would be
+meaningless. The validators are covered by `tests/test_validators.py`
+(`python -m pytest tests/` from `deck_agent/`) — extend it whenever a layer or
+capability value changes.
 
 ## Real vs. stub — where to make changes
 
@@ -151,9 +157,6 @@ body. The loop and validator depend on the contracts, not the implementations.
 
 Still open, to close during the corporate build-out:
 
-- **No automated test suite.** The validators are pure functions and the
-  safety-critical component — they want unit coverage per layer and per error
-  path. `run.py` is a demo, not coverage.
 - **No credential/secret handling in the gateway.** Document how secrets reach
   `GatewayClient` (env vars / secret manager, never literals). `.gitignore`
   already excludes `.env`.
@@ -164,5 +167,8 @@ Still open, to close during the corporate build-out:
   and validator don't account for it — reconcile when the schema is frozen.
 
 Addressed in this scaffold (previously open): `output_name` path-traversal
-(sanitised in `deck.py`), gateway transient-failure retry (`agent.py`), and
-transcript/audit persistence (`audit_dir`).
+(sanitised in `deck.py`), gateway transient-failure retry (`agent.py`),
+transcript/audit persistence (`audit_dir`), validator unit coverage
+(`tests/test_validators.py`), element-vs-layout region checks and per-element
+style-token families (`renderer_capabilities.py` `allowed_element_types` /
+`ELEMENT_STYLE_TOKENS`), and rejection of `data_key` on non-data elements.

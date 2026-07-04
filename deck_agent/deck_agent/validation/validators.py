@@ -7,11 +7,14 @@ revision). Fail-FAST only between layers where a later layer would be meaningles
 (e.g. don't check vocabulary on a spec that doesn't parse).
 
 Layer 1 — schema/structural : is it well-formed?
-Layer 2 — vocabulary        : do these tokens / layouts / element types exist?
+Layer 2 — vocabulary        : do these tokens / layouts / element types exist,
+                              and does each style token match its element's
+                              family?
 Layer 3 — referential       : do referenced data_keys / chart configs exist?
 Layer 4 — renderability      : given valid structure + real metadata, will it
-                               actually render correctly? (shape-fit, capacity,
-                               layout-slot conflict)
+                               actually render correctly? (element-region fit,
+                               shape-fit, data_key on non-data elements,
+                               capacity, layout-slot conflict)
 
 NOTE: chart-TYPE compatibility checking has been intentionally retired. The
 data-viz skill now owns visualization decisioning and produces chart configs,
@@ -24,9 +27,11 @@ from __future__ import annotations
 from ..renderer_capabilities import (
     ALL_STYLE_TOKENS,
     ELEMENT_DATA_SHAPES,
+    ELEMENT_STYLE_TOKENS,
     ELEMENT_TYPES,
     LAYOUT_NAMES,
     layout_limits,
+    layouts_supporting,
 )
 from .result import ValidationError, ValidationResult
 
@@ -142,14 +147,32 @@ def _validate_vocabulary(spec: dict) -> list[ValidationError]:
                 ))
 
             style = element.get("style")
-            if style is not None and style not in ALL_STYLE_TOKENS:
-                errors.append(ValidationError(
-                    f"{epath}.style",
-                    f"Style token '{style}' is not supported.",
-                    f"Valid style tokens are: {sorted(ALL_STYLE_TOKENS)}. "
-                    f"Never invent a token — if you need one that doesn't exist, "
-                    f"flag it to the user.",
-                ))
+            if style is not None:
+                if style not in ALL_STYLE_TOKENS:
+                    errors.append(ValidationError(
+                        f"{epath}.style",
+                        f"Style token '{style}' is not supported.",
+                        f"Valid style tokens are: {sorted(ALL_STYLE_TOKENS)}. "
+                        f"Never invent a token — if you need one that doesn't exist, "
+                        f"flag it to the user.",
+                    ))
+                elif etype in ELEMENT_TYPES:
+                    # Token exists but may belong to the wrong family for this
+                    # element type (e.g. a chart style on a table).
+                    allowed_styles = ELEMENT_STYLE_TOKENS.get(etype, set())
+                    if style not in allowed_styles:
+                        if allowed_styles:
+                            hint = (f"Valid style tokens for '{etype}' elements: "
+                                    f"{sorted(allowed_styles)}.")
+                        else:
+                            hint = (f"'{etype}' elements take no style token — "
+                                    f"remove 'style'.")
+                        errors.append(ValidationError(
+                            f"{epath}.style",
+                            f"Style token '{style}' is not valid for a '{etype}' "
+                            f"element.",
+                            hint,
+                        ))
     return errors
 
 
@@ -198,17 +221,55 @@ def _validate_renderability(spec: dict, data_catalog: dict) -> list[ValidationEr
 
         for e_idx, element in enumerate(slide.get("elements", [])):
             epath = f"{path}.elements[{e_idx}]"
+            misplaced = _check_element_layout_fit(element, slide, epath)
+            if misplaced:
+                # The element has no region on this layout; data-fit and
+                # capacity checks would only restate the same misplacement.
+                errors.extend(misplaced)
+                continue
             errors.extend(_check_element_data_fit(element, data_catalog, epath))
             errors.extend(_check_capacity(element, slide, data_catalog, epath))
     return errors
 
 
+def _check_element_layout_fit(element, slide, path) -> list[ValidationError]:
+    """The layout must have a region for this element type (e.g. no chart on a
+    commentary slide, no table on a two_charts slide)."""
+    etype = element.get("type")
+    layout = slide.get("layout")
+    if etype not in ELEMENT_TYPES or layout not in LAYOUT_NAMES:
+        return []  # vocabulary layer already reported the unknown name
+    allowed = layout_limits(layout).get("allowed_element_types")
+    if allowed is None or etype in allowed:
+        return []
+    return [ValidationError(
+        f"{path}.type",
+        f"Layout '{layout}' has no region for a '{etype}' element.",
+        f"Layouts that support '{etype}': {layouts_supporting(etype)}. "
+        f"Move this element to one of those layouts, or drop it.",
+    )]
+
+
 def _check_element_data_fit(element, data_catalog, path) -> list[ValidationError]:
-    """Element type must match the SHAPE of the data it points at."""
+    """Element type must match the SHAPE of the data it points at, and only
+    data-bearing element types may carry a data_key at all."""
     errors: list[ValidationError] = []
     etype = element.get("type")
     data_key = element.get("data_key")
     if data_key is None:
+        return errors
+
+    if etype in ELEMENT_TYPES and etype not in ELEMENT_DATA_SHAPES:
+        # A data_key on a title/text element would be silently ignored by the
+        # renderer — the model may believe a figure will appear that never does.
+        errors.append(ValidationError(
+            f"{path}.data_key",
+            f"Element type '{etype}' does not consume data; its 'data_key' "
+            f"would be ignored at render time.",
+            f"Remove 'data_key' from this element, or use a data-bearing "
+            f"element type ({sorted(ELEMENT_DATA_SHAPES)}) if this value "
+            f"should be rendered from the data layer.",
+        ))
         return errors
 
     meta = data_catalog.get(data_key)
@@ -237,10 +298,20 @@ def _suggest_element_for_shape(shape: str) -> str:
 
 
 def _check_capacity(element, slide, data_catalog, path) -> list[ValidationError]:
-    """Predictable overflow: a table with more rows than the layout region holds."""
+    """Predictable overflow: a table with more rows than the layout region holds.
+
+    Runs only for elements the layout accepts (_check_element_layout_fit gates
+    it), so max_rows == 0 here means the capabilities file is inconsistent
+    (table allowed, no row capacity) — that drift surfaces as an error rather
+    than a silent pass. Do NOT re-add a falsy `max_rows and` guard.
+    """
     errors: list[ValidationError] = []
     if element.get("type") != "table":
         return errors
+
+    layout = slide.get("layout")
+    if layout not in LAYOUT_NAMES:
+        return errors  # vocabulary layer already reported the unknown layout
 
     data_key = element.get("data_key")
     meta = data_catalog.get(data_key) if data_key else None
@@ -248,14 +319,18 @@ def _check_capacity(element, slide, data_catalog, path) -> list[ValidationError]
         return errors
 
     rows = meta.get("row_count", 0)
-    limits = layout_limits(slide.get("layout", ""))
-    max_rows = limits.get("table_max_rows", 0)
-    if max_rows and rows > max_rows:
+    max_rows = layout_limits(layout).get("table_max_rows", 0)
+    if rows > max_rows:
+        if max_rows:
+            hint = (f"Filter to the top {max_rows} rows, split across two "
+                    f"slides, or choose a layout with a larger table region.")
+        else:
+            hint = (f"Layout '{layout}' has no table capacity. Choose a layout "
+                    f"that supports tables: {layouts_supporting('table')}.")
         errors.append(ValidationError(
             f"{path}.data_key",
-            f"Table has {rows} rows; layout '{slide.get('layout')}' holds {max_rows}.",
-            f"Filter to the top {max_rows} rows, split across two slides, or "
-            f"choose a layout with a larger table region.",
+            f"Table has {rows} rows; layout '{layout}' holds {max_rows}.",
+            hint,
         ))
     return errors
 
